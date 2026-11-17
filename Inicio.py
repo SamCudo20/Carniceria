@@ -13,7 +13,6 @@ st.markdown(
     """
     <style>
     .main { padding: 2rem; }
-    .stAlert { margin-top: 1rem; }
     </style>
 """,
     unsafe_allow_html=True,
@@ -22,13 +21,9 @@ st.markdown(
 CANDIDATAS_TIEMPO = ["time", "_time", "timestamp", "fecha", "date", "datetime"]
 
 
-# ============================================================
-#  Preparación de datos
-# ============================================================
 def preparar_datos(df):
-  """Detecta la columna de tiempo y las columnas numéricas del archivo."""
+  """Detecta la columna de tiempo y limpia las columnas numéricas."""
   df = df.copy()
-
   col_tiempo = next(
       (
           c
@@ -50,219 +45,164 @@ def preparar_datos(df):
       if convertida.notna().mean() >= 0.9:
         df[c] = convertida
 
-  numericas = df.select_dtypes(include="number").columns.tolist()
-  return df, numericas, col_tiempo
-
-
-def normalizar(df):
-  """Escala cada columna a 0–1 para comparar variables con unidades distintas."""
-  rango = (df.max() - df.min()).replace(0, 1)
-  return (df - df.min()) / rango
+  return df
 
 
 # ============================================================
-#  Encabezado del Sistema de Carnicería
+#  Encabezado Principal
 # ============================================================
-st.title("🥩 Sistema de Monitoreo y Control - Cuarto Frío de Carnicería")
+st.title("🥩 Monitoreo del Cuarto Frío - Carnicería")
 st.markdown("""
-    Plataforma IoT para la supervisión de temperatura, humedad relativa, 
-    tiempos de conservación de la carne y gestión de ventilación automatizada.
+    Control de temperatura, humedad relativa y estado operativo para la conservación óptima de la carne.
 """)
 
 # ============================================================
-#  Carga automática de archivos locales ('temp' y 'hum')
+#  Carga de archivos locales (temp.csv y hum.csv)
 # ============================================================
 df1 = None
-posibles_temp = ["temp.csv", "temp", "temperatura.csv"]
-posibles_hum = ["hum.csv", "hum", "humedad.csv"]
+archivo_temp = "temp.csv" if os.path.exists("temp.csv") else ("temp" if os.path.exists("temp") else None)
+archivo_hum = "hum.csv" if os.path.exists("hum.csv") else ("hum" if os.path.exists("hum") else None)
 
-archivo_temp = next((f for f in posibles_temp if os.path.exists(f)), None)
-archivo_hum = next((f for f in posibles_hum if os.path.exists(f)), None)
-
-if archivo_temp and archivo_hum:
-  try:
+try:
+  df_list = []
+  if archivo_temp and os.path.exists(archivo_temp):
     df_t = pd.read_csv(archivo_temp)
+    df_t = preparar_datos(df_t)
+    df_list.append(df_t)
+
+  if archivo_hum and os.path.exists(archivo_hum):
     df_h = pd.read_csv(archivo_hum)
+    df_h = preparar_datos(df_h)
+    df_list.append(df_h)
 
-    df_t, vars_t, _ = preparar_datos(df_t)
-    df_h, vars_h, _ = preparar_datos(df_h)
+  if df_list:
+    # Unir ambos DataFrames de manera segura para evitar valores NaN
+    df1 = pd.concat(df_list, axis=1)
+    # Limpiar duplicados de columnas si los hubiera
+    df1 = df1.loc[:, ~df1.columns.duplicated()]
+    st.sidebar.success("📂 Archivos `temp.csv` y `hum.csv` cargados correctamente.")
 
-    if not df_t.empty and not df_h.empty:
-      if isinstance(df_t.index, pd.DatetimeIndex) and isinstance(
-          df_h.index, pd.DatetimeIndex
-      ):
-        df1 = pd.merge(
-            df_t,
-            df_h,
-            left_index=True,
-            right_index=True,
-            how="outer",
-            suffixes=("_temp", "_hum"),
-        )
-      else:
-        df1 = pd.concat([df_t, df_h], axis=1)
-    st.sidebar.success(
-        f"📂 Datos cargados automáticamente desde: `{archivo_temp}` y"
-        f" `{archivo_hum}`"
-    )
-  except Exception as e:
-    st.sidebar.warning(f"Error al leer archivos locales: {e}")
+except Exception as e:
+  st.sidebar.error(f"Error al procesar los archivos locales: {e}")
 
-# Respaldo con uploader manual si no se encuentran en la ruta
+# Respaldo si no encuentra los archivos separados
 if df1 is None or df1.empty:
-  st.sidebar.info(
-      "No se detectaron los archivos `temp` y `hum` en la raíz del repositorio."
-      " Puede cargarlos manualmente."
-  )
-  uploaded_file = st.sidebar.file_uploader(
-      "Cargar archivo CSV consolidado", type=["csv"]
-  )
+  uploaded_file = st.sidebar.file_uploader("Cargar CSV consolidado", type=["csv"])
   if uploaded_file is not None:
-    df_original = pd.read_csv(uploaded_file)
-    df1, _, _ = preparar_datos(df_original)
+    df1 = pd.read_csv(uploaded_file)
+    df1 = preparar_datos(df1)
   else:
-    st.warning("⚠️ Por favor, asegúrese de que los archivos `temp` y `hum` estén en el repositorio o cargue un archivo de respaldo.")
+    st.warning("⚠️ No se encontraron `temp.csv` o `hum.csv` en la raíz del repositorio. Por favor, súbelos a GitHub.")
     st.stop()
 
-df1, variables, col_tiempo = preparar_datos(df1)
+variables = df1.select_dtypes(include="number").columns.tolist()
 
 if not variables:
   st.error("No se encontraron columnas numéricas válidas en los datos.")
   st.stop()
 
 # ============================================================
-#  Estructura de Pestañas
+#  Pestañas de la Aplicación
 # ============================================================
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📈 Monitoreo en Vivo",
-    "🥩 Conservación y Carnes",
-    "📊 Estadísticas",
-    "🔍 Filtros",
+tab1, tab2, tab3, tab4 = st.tabs([
+    "📊 Panel Principal",
+    "🥩 Conservación de Carnes",
+    "📈 Gráficas Históricas",
     "⚙️ Control y Ventilación",
 ])
 
 # ----------------------------------------------------
-#  TAB 1 · Monitoreo en Vivo
+#  TAB 1 · Panel Principal (Basado en tu imagen)
 # ----------------------------------------------------
 with tab1:
-  st.subheader("Lecturas Actuales del Cuarto Frío")
+  st.subheader("Estado Actual del Sistema")
 
   if not df1.empty:
     ultimo = df1.iloc[-1]
     
-    # Identificar temperatura y humedad de forma segura
-    col_t = next((c for c in variables if "temp" in c.lower()), variables[0])
-    col_h = (
-        next((c for c in variables if "hum" in c.lower()), variables[1])
-        if len(variables) > 1
-        else variables[0]
-    )
+    # Detección inteligente de variables para evitar NaN
+    col_t = next((c for c in variables if "temp" in c.lower() or "t" in c.lower()), variables[0])
+    col_h = next((c for c in variables if "hum" in c.lower() or "h" in c.lower()), variables[1] if len(variables) > 1 else variables[0])
 
     t_val = ultimo.get(col_t, 0)
     h_val = ultimo.get(col_h, 0)
 
-    m1, m2, m3 = st.columns(3)
-    m1.metric(
-        "Temperatura Actual",
-        f"{t_val:.2f} °C",
-        delta="Óptimo (<= -18°C)" if t_val <= -18 else "Alerta: Temperatura Alta",
-    )
-    m2.metric(
-        "Humedad Relativa",
-        f"{h_val:.1f} %",
-        delta="Seguro (<= 70%)" if h_val <= 70 else "Peligro: Alta Humedad",
-    )
-    m3.metric(
-        "Estado Sanitario",
-        "Seguro" if t_val <= -18 and h_val <= 70 else "Revisar Alertas",
-    )
+    # Determinar el estado del cuarto frío basado en umbrales lógicos
+    if h_val > 70:
+      estado_texto = "Peligro alta humedad"
+      estado_color = "🔴"
+    elif t_val <= -18:
+      estado_texto = "Condiciones óptimas"
+      estado_color = "🟢"
+    else:
+      estado_texto = "Temperatura alta"
+      estado_color = "🟡"
+
+    # Tarjetas principales idénticas a la estructura solicitada
+    c1, c2 = st.columns(2)
+    with c1:
+      st.metric(label="🌡️ Temperatura", value=f"{t_val:.1f} °C")
+    with c2:
+      st.metric(label="💧 Humedad", value=f"{h_val:.1f} %")
 
     st.markdown("---")
-    st.subheader("Tendencia Histórica Combinada")
-    st.line_chart(df1[variables])
+    
+    # Tarjeta de Estado Grande
+    st.markdown(f"""
+        <div style="padding: 20px; border-radius: 10px; background-color: #f0f2f6; border-left: 6px solid #ffa100;">
+            <h3 style="margin:0; color: #31333F;">⚠️ Estado del Sistema</h3>
+            <p style="font-size: 24px; font-weight: bold; margin: 5px 0 0 0; color: #1f1f1f;">
+                {estado_color} {estado_texto}
+            </p>
+        </div>
+    """, unsafe_allow_html=True)
 
 # ----------------------------------------------------
-#  TAB 2 · Conservación y Carnes
+#  TAB 2 · Conservación de Carnes
 # ----------------------------------------------------
 with tab2:
-  st.subheader("Análisis de Vida Útil y Descomposición de la Carne")
+  st.subheader("Tiempos de Descomposición y Conservación")
   st.write("""
-        El control estricto de la temperatura y la humedad en el cuarto frío previene 
-        la proliferación bacteriana y la descomposición prematura de los productos cárnicos.
-    """)
-
-  c1, c2 = st.columns(2)
-  with c1:
-    st.info("""
-            **Umbrales de Temperatura:**
-            * **Congelación (<= -18 °C):** Detiene la actividad microbiana. La carne se conserva de forma segura durante meses.
-            * **Refrigeración (-2 °C a 2 °C):** Almacenamiento a corto plazo para carnes frescas (3 a 7 días según el corte).
-            * **Zona de Peligro (> 4 °C):** Riesgo crítico de crecimiento de patógenos (*Salmonella, E. coli*), provocando descomposición rápida, malos olores y pérdida total del producto.
-        """)
-  with c2:
-    st.success("""
-            **Control de Humedad y Ventilación:**
-            * Mantener la humedad por debajo del **70%** evita la condensación excesiva y la aparición de hongos superficiales.
-            * El sistema activa la compuerta de ventilación automáticamente para renovar el aire cuando los niveles de humedad o temperatura se salen del rango óptimo.
-        """)
+    Un control adecuado de la temperatura previene la proliferación bacteriana en la carnicería:
+  """)
+  st.info("""
+    * **Menor o igual a -18 °C (Congelación):** Detiene la actividad microbiana. La carne se conserva de forma segura durante meses sin perder propiedades organolépticas.
+    * **Entre -2 °C y 2 °C (Refrigeración fresca):** Extiende la vida útil de cortes frescos de res o cerdo de 3 a 7 días.
+    * **Mayor a 4 °C (Zona de Peligro):** Aumenta drásticamente el riesgo de descomposición, malos olores y crecimiento de bacterias patógenas.
+  """)
 
 # ----------------------------------------------------
-#  TAB 3 · Estadísticas
+#  TAB 3 · Gráficas Históricas
 # ----------------------------------------------------
 with tab3:
-  st.subheader("Resumen Estadístico")
-  st.dataframe(df1[variables].describe().T.round(2))
-
-  if len(variables) >= 2:
-    st.write("#### Correlación entre Temperatura y Humedad")
-    st.dataframe(df1[variables].corr().round(2))
+  st.subheader("Tendencia de Temperatura y Humedad")
+  st.line_chart(df1[variables])
 
 # ----------------------------------------------------
-#  TAB 4 · Filtros
+#  TAB 4 · Control y Ventilación
 # ----------------------------------------------------
 with tab4:
-  st.subheader("Filtrado de Registros por Variable")
-  var_filtro = st.selectbox("Variable a filtrar", variables)
-  min_v, max_v = float(df1[var_filtro].min()), float(df1[var_filtro].max())
-
-  if min_v != max_v:
-    rango = st.slider("Rango de valores", min_v, max_v, (min_v, max_v))
-    filtrado = df1[df1[var_filtro].between(rango[0], rango[1])]
-    st.dataframe(filtrado)
-    st.download_button(
-        "📥 Descargar datos filtrados (CSV)",
-        filtrado.to_csv().encode("utf-8"),
-        "datos_filtrados_carniceria.csv",
-        "csv",
-    )
-
-# ----------------------------------------------------
-#  TAB 5 · Control y Ventilación
-# ----------------------------------------------------
-with tab5:
-  st.subheader("Estado de la Ventilación y Actuadores (Servomotor)")
-  st.write("""
-        Visualización del comportamiento del servo en función de las variables ambientales del cuarto frío.
-    """)
-
+  st.subheader("Gestión del Servomotor (Ventilación)")
+  st.write("El sistema ajusta la compuerta de ventilación según los valores del entorno para disipar calor o expulsar humedad.")
+  
   if not df1.empty:
     ultimo = df1.iloc[-1]
     t_val = ultimo.get(variables[0], -18)
     h_val = ultimo.get(variables[1] if len(variables) > 1 else variables[0], 50)
 
     if h_val > 70:
-      estado_servo = "Abierto (180°) — Expulsando exceso de humedad"
+      servo_pos = "Abierto (180°) - Expulsando humedad"
     elif t_val <= -18:
-      estado_servo = "Cerrado (0°) — Manteniendo frío óptimo"
+      servo_pos = "Cerrado (0°) - Manteniendo frío"
     else:
-      estado_servo = "Medio (90°) — Disipando temperatura alta"
+      servo_pos = "Medio (90°) - Disipando temperatura alta"
 
-    st.metric("Posición Actual de la Compuerta", estado_servo)
+    st.metric("Posición de la Compuerta", servo_pos)
 
 # ============================================================
 #  Pie de página
 # ============================================================
 st.markdown("""
     ---
-    **Sistema de Telemetría y Control de Cuarto Frío — Carnicería** | Universidad EAFIT
+    **Sistema IoT de Monitoreo para Cuarto Frío** | Universidad EAFIT
 """)
