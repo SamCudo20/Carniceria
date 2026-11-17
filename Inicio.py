@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 import streamlit as st
 
@@ -5,19 +6,19 @@ import streamlit as st
 #  Configuración de la página
 # ============================================================
 st.set_page_config(
-    page_title="Análisis de Sensores - Mi Ciudad",
-    page_icon="📊",
-    layout="wide"
+    page_title="Control de Cuarto Frío - Carnicería", page_icon="🥩", layout="wide"
 )
 
-st.markdown("""
+st.markdown(
+    """
     <style>
     .main { padding: 2rem; }
     .stAlert { margin-top: 1rem; }
     </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
-# Nombres que se reconocen como columna de tiempo (sin importar mayúsculas)
 CANDIDATAS_TIEMPO = ["time", "_time", "timestamp", "fecha", "date", "datetime"]
 
 
@@ -25,227 +26,243 @@ CANDIDATAS_TIEMPO = ["time", "_time", "timestamp", "fecha", "date", "datetime"]
 #  Preparación de datos
 # ============================================================
 def preparar_datos(df):
-    """Detecta la columna de tiempo y las columnas numéricas del CSV.
+  """Detecta la columna de tiempo y las columnas numéricas del archivo."""
+  df = df.copy()
 
-    Devuelve el DataFrame procesado, la lista de variables numéricas
-    y el nombre original de la columna de tiempo (o None).
-    """
-    df = df.copy()
+  col_tiempo = next(
+      (
+          c
+          for c in df.columns
+          if str(c).strip().lower() in CANDIDATAS_TIEMPO
+      ),
+      None,
+  )
+  if col_tiempo is not None:
+    df[col_tiempo] = pd.to_datetime(df[col_tiempo], errors="coerce")
+    df = df.dropna(subset=[col_tiempo]).set_index(col_tiempo).sort_index()
+    df.index.name = "Time"
 
-    # 1. Columna de tiempo → índice
-    col_tiempo = next(
-        (c for c in df.columns if str(c).strip().lower() in CANDIDATAS_TIEMPO),
-        None
-    )
-    if col_tiempo is not None:
-        df[col_tiempo] = pd.to_datetime(df[col_tiempo], errors="coerce")
-        df = df.dropna(subset=[col_tiempo]).set_index(col_tiempo).sort_index()
-        df.index.name = "Time"
+  for c in df.columns:
+    if not pd.api.types.is_numeric_dtype(df[c]):
+      convertida = pd.to_numeric(
+          df[c].astype(str).str.replace(",", ".", regex=False), errors="coerce"
+      )
+      if convertida.notna().mean() >= 0.9:
+        df[c] = convertida
 
-    # 2. Columnas de texto que en realidad son números (p. ej. "23,5")
-    for c in df.columns:
-        # (pandas 3 usa StringDtype para texto, por eso no basta con dtype == object)
-        if not pd.api.types.is_numeric_dtype(df[c]):
-            convertida = pd.to_numeric(
-                df[c].astype(str).str.replace(",", ".", regex=False),
-                errors="coerce"
-            )
-            if convertida.notna().mean() >= 0.9:
-                df[c] = convertida
-
-    # 3. Variables numéricas disponibles para el análisis
-    numericas = df.select_dtypes(include="number").columns.tolist()
-    return df, numericas, col_tiempo
+  numericas = df.select_dtypes(include="number").columns.tolist()
+  return df, numericas, col_tiempo
 
 
 def normalizar(df):
-    """Escala cada columna a 0–1 para comparar variables con unidades distintas."""
-    rango = (df.max() - df.min()).replace(0, 1)
-    return (df - df.min()) / rango
+  """Escala cada columna a 0–1 para comparar variables con unidades distintas."""
+  rango = (df.max() - df.min()).replace(0, 1)
+  return (df - df.min()) / rango
 
 
 # ============================================================
-#  Encabezado y mapa
+#  Encabezado del Sistema de Carnicería
 # ============================================================
-st.title("📊 Análisis de datos de Sensores en Mi Ciudad")
+st.title("🥩 Sistema de Monitoreo y Control - Cuarto Frío de Carnicería")
 st.markdown("""
-    Esta aplicación permite analizar datos de sensores
-    recolectados en diferentes puntos de la ciudad.
+    Plataforma IoT para la supervisión de temperatura, humedad relativa, 
+    tiempos de conservación de la carne y gestión de ventilación automatizada.
 """)
 
-eafit_location = pd.DataFrame({
-    "lat": [6.2006],
-    "lon": [-75.5783],
-    "location": ["Universidad EAFIT"]
-})
+# ============================================================
+#  Carga automática de archivos locales ('temp' y 'hum')
+# ============================================================
+df1 = None
+posibles_temp = ["temp.csv", "temp", "temperatura.csv"]
+posibles_hum = ["hum.csv", "hum", "humedad.csv"]
 
-st.subheader("📍 Ubicación de los Sensores - Universidad EAFIT")
-st.map(eafit_location, zoom=15)
+archivo_temp = next((f for f in posibles_temp if os.path.exists(f)), None)
+archivo_hum = next((f for f in posibles_hum if os.path.exists(f)), None)
+
+if archivo_temp and archivo_hum:
+  try:
+    df_t = pd.read_csv(archivo_temp)
+    df_h = pd.read_csv(archivo_hum)
+
+    df_t, vars_t, _ = preparar_datos(df_t)
+    df_h, vars_h, _ = preparar_datos(df_h)
+
+    if not df_t.empty and not df_h.empty:
+      if isinstance(df_t.index, pd.DatetimeIndex) and isinstance(
+          df_h.index, pd.DatetimeIndex
+      ):
+        df1 = pd.merge(
+            df_t,
+            df_h,
+            left_index=True,
+            right_index=True,
+            how="outer",
+            suffixes=("_temp", "_hum"),
+        )
+      else:
+        df1 = pd.concat([df_t, df_h], axis=1)
+    st.sidebar.success(
+        f"📂 Datos cargados automáticamente desde: `{archivo_temp}` y"
+        f" `{archivo_hum}`"
+    )
+  except Exception as e:
+    st.sidebar.warning(f"Error al leer archivos locales: {e}")
+
+# Respaldo con uploader manual si no se encuentran en la ruta
+if df1 is None or df1.empty:
+  st.sidebar.info(
+      "No se detectaron los archivos `temp` y `hum` en la raíz del repositorio."
+      " Puede cargarlos manualmente."
+  )
+  uploaded_file = st.sidebar.file_uploader(
+      "Cargar archivo CSV consolidado", type=["csv"]
+  )
+  if uploaded_file is not None:
+    df_original = pd.read_csv(uploaded_file)
+    df1, _, _ = preparar_datos(df_original)
+  else:
+    st.warning("⚠️ Por favor, asegúrese de que los archivos `temp` y `hum` estén en el repositorio o cargue un archivo de respaldo.")
+    st.stop()
+
+df1, variables, col_tiempo = preparar_datos(df1)
+
+if not variables:
+  st.error("No se encontraron columnas numéricas válidas en los datos.")
+  st.stop()
 
 # ============================================================
-#  Carga del archivo
+#  Estructura de Pestañas
 # ============================================================
-uploaded_file = st.file_uploader("Seleccione archivo CSV", type=["csv"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "📈 Monitoreo en Vivo",
+    "🥩 Conservación y Carnes",
+    "📊 Estadísticas",
+    "🔍 Filtros",
+    "⚙️ Control y Ventilación",
+])
 
-if uploaded_file is not None:
-    try:
-        df_original = pd.read_csv(uploaded_file)
-        df1, variables, col_tiempo = preparar_datos(df_original)
+# ----------------------------------------------------
+#  TAB 1 · Monitoreo en Vivo
+# ----------------------------------------------------
+with tab1:
+  st.subheader("Lecturas Actuales del Cuarto Frío")
 
-        if not variables:
-            st.error("No se encontraron columnas numéricas en el archivo.")
-            st.stop()
+  if not df1.empty:
+    ultimo = df1.iloc[-1]
+    
+    # Identificar temperatura y humedad de forma segura
+    col_t = next((c for c in variables if "temp" in c.lower()), variables[0])
+    col_h = (
+        next((c for c in variables if "hum" in c.lower()), variables[1])
+        if len(variables) > 1
+        else variables[0]
+    )
 
-        st.success(
-            f"Se detectaron **{len(variables)}** variable(s) numérica(s): "
-            + ", ".join(f"`{v}`" for v in variables)
-        )
-        if col_tiempo is None:
-            st.info("No se encontró columna de tiempo; se usará el número de registro como eje X.")
+    t_val = ultimo.get(col_t, 0)
+    h_val = ultimo.get(col_h, 0)
 
-        tab1, tab2, tab3, tab4 = st.tabs(
-            ["📈 Visualización", "📊 Estadísticas", "🔍 Filtros", "🗺️ Información del Sitio"]
-        )
+    m1, m2, m3 = st.columns(3)
+    m1.metric(
+        "Temperatura Actual",
+        f"{t_val:.2f} °C",
+        delta="Óptimo (<= -18°C)" if t_val <= -18 else "Alerta: Temperatura Alta",
+    )
+    m2.metric(
+        "Humedad Relativa",
+        f"{h_val:.1f} %",
+        delta="Seguro (<= 70%)" if h_val <= 70 else "Peligro: Alta Humedad",
+    )
+    m3.metric(
+        "Estado Sanitario",
+        "Seguro" if t_val <= -18 and h_val <= 70 else "Revisar Alertas",
+    )
 
-        # ----------------------------------------------------
-        #  TAB 1 · Visualización
-        # ----------------------------------------------------
-        with tab1:
-            st.subheader("Visualización de Datos")
+    st.markdown("---")
+    st.subheader("Tendencia Histórica Combinada")
+    st.line_chart(df1[variables])
 
-            col_a, col_b = st.columns([3, 1])
-            with col_a:
-                vars_graf = st.multiselect(
-                    "Variables a graficar",
-                    variables,
-                    default=variables if len(variables) <= 4 else variables[:2]
-                )
-            with col_b:
-                chart_type = st.selectbox("Tipo de gráfico", ["Línea", "Área", "Barra"])
+# ----------------------------------------------------
+#  TAB 2 · Conservación y Carnes
+# ----------------------------------------------------
+with tab2:
+  st.subheader("Análisis de Vida Útil y Descomposición de la Carne")
+  st.write("""
+        El control estricto de la temperatura y la humedad en el cuarto frío previene 
+        la proliferación bacteriana y la descomposición prematura de los productos cárnicos.
+    """)
 
-            normalizado = st.checkbox(
-                "Normalizar escalas (0–1)",
-                help="Útil para comparar variables con unidades distintas, "
-                     "por ejemplo temperatura (°C) y humedad (%)."
-            )
+  c1, c2 = st.columns(2)
+  with c1:
+    st.info("""
+            **Umbrales de Temperatura:**
+            * **Congelación (<= -18 °C):** Detiene la actividad microbiana. La carne se conserva de forma segura durante meses.
+            * **Refrigeración (-2 °C a 2 °C):** Almacenamiento a corto plazo para carnes frescas (3 a 7 días según el corte).
+            * **Zona de Peligro (> 4 °C):** Riesgo crítico de crecimiento de patógenos (*Salmonella, E. coli*), provocando descomposición rápida, malos olores y pérdida total del producto.
+        """)
+  with c2:
+    st.success("""
+            **Control de Humedad y Ventilación:**
+            * Mantener la humedad por debajo del **70%** evita la condensación excesiva y la aparición de hongos superficiales.
+            * El sistema activa la compuerta de ventilación automáticamente para renovar el aire cuando los niveles de humedad o temperatura se salen del rango óptimo.
+        """)
 
-            if not vars_graf:
-                st.warning("Seleccione al menos una variable.")
-            else:
-                datos_graf = df1[vars_graf]
-                if normalizado:
-                    datos_graf = normalizar(datos_graf)
+# ----------------------------------------------------
+#  TAB 3 · Estadísticas
+# ----------------------------------------------------
+with tab3:
+  st.subheader("Resumen Estadístico")
+  st.dataframe(df1[variables].describe().T.round(2))
 
-                if chart_type == "Línea":
-                    st.line_chart(datos_graf)
-                elif chart_type == "Área":
-                    st.area_chart(datos_graf)
-                else:
-                    st.bar_chart(datos_graf)
+  if len(variables) >= 2:
+    st.write("#### Correlación entre Temperatura y Humedad")
+    st.dataframe(df1[variables].corr().round(2))
 
-            if st.checkbox("Mostrar datos crudos"):
-                st.dataframe(df1)
+# ----------------------------------------------------
+#  TAB 4 · Filtros
+# ----------------------------------------------------
+with tab4:
+  st.subheader("Filtrado de Registros por Variable")
+  var_filtro = st.selectbox("Variable a filtrar", variables)
+  min_v, max_v = float(df1[var_filtro].min()), float(df1[var_filtro].max())
 
-        # ----------------------------------------------------
-        #  TAB 2 · Estadísticas
-        # ----------------------------------------------------
-        with tab2:
-            st.subheader("Análisis Estadístico")
+  if min_v != max_v:
+    rango = st.slider("Rango de valores", min_v, max_v, (min_v, max_v))
+    filtrado = df1[df1[var_filtro].between(rango[0], rango[1])]
+    st.dataframe(filtrado)
+    st.download_button(
+        "📥 Descargar datos filtrados (CSV)",
+        filtrado.to_csv().encode("utf-8"),
+        "datos_filtrados_carniceria.csv",
+        "csv",
+    )
 
-            st.write("#### Resumen de todas las variables")
-            st.dataframe(df1[variables].describe().T.round(2))
+# ----------------------------------------------------
+#  TAB 5 · Control y Ventilación
+# ----------------------------------------------------
+with tab5:
+  st.subheader("Estado de la Ventilación y Actuadores (Servomotor)")
+  st.write("""
+        Visualización del comportamiento del servo en función de las variables ambientales del cuarto frío.
+    """)
 
-            st.write("#### Detalle por variable")
-            var_stats = st.selectbox("Variable", variables, key="var_stats")
-            serie = df1[var_stats].dropna()
+  if not df1.empty:
+    ultimo = df1.iloc[-1]
+    t_val = ultimo.get(variables[0], -18)
+    h_val = ultimo.get(variables[1] if len(variables) > 1 else variables[0], 50)
 
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Promedio", f"{serie.mean():.2f}")
-            m2.metric("Máximo", f"{serie.max():.2f}")
-            m3.metric("Mínimo", f"{serie.min():.2f}")
-            m4.metric("Desv. estándar", f"{serie.std():.2f}")
+    if h_val > 70:
+      estado_servo = "Abierto (180°) — Expulsando exceso de humedad"
+    elif t_val <= -18:
+      estado_servo = "Cerrado (0°) — Manteniendo frío óptimo"
+    else:
+      estado_servo = "Medio (90°) — Disipando temperatura alta"
 
-            if len(variables) >= 2:
-                st.write("#### Correlación entre variables")
-                st.dataframe(df1[variables].corr().round(2))
-                st.caption(
-                    "Valores cercanos a 1 o −1 indican una relación lineal fuerte; "
-                    "cercanos a 0, poca relación."
-                )
-
-        # ----------------------------------------------------
-        #  TAB 3 · Filtros
-        # ----------------------------------------------------
-        with tab3:
-            st.subheader("Filtros de Datos")
-
-            var_filtro = st.selectbox("Variable a filtrar", variables, key="var_filtro")
-            min_value = float(df1[var_filtro].min())
-            max_value = float(df1[var_filtro].max())
-
-            if min_value == max_value:
-                st.warning(f"⚠️ Todos los valores de `{var_filtro}` son iguales: {min_value:.2f}")
-                st.info("No es posible aplicar filtros cuando no hay variación en los datos.")
-                st.dataframe(df1)
-            else:
-                rango = st.slider(
-                    f"Rango de {var_filtro}",
-                    min_value,
-                    max_value,
-                    (min_value, max_value),
-                    key=f"rango_{var_filtro}"
-                )
-
-                filtrado = df1[df1[var_filtro].between(rango[0], rango[1])]
-                st.write(
-                    f"**{len(filtrado)}** de {len(df1)} registros con `{var_filtro}` "
-                    f"entre {rango[0]:.2f} y {rango[1]:.2f}:"
-                )
-                st.dataframe(filtrado)
-
-                st.download_button(
-                    label="⬇️ Descargar datos filtrados (CSV)",
-                    data=filtrado.to_csv().encode("utf-8"),
-                    file_name=f"datos_filtrados_{var_filtro}.csv",
-                    mime="text/csv",
-                )
-
-        # ----------------------------------------------------
-        #  TAB 4 · Información del sitio
-        # ----------------------------------------------------
-        with tab4:
-            st.subheader("Información del Sitio de Medición")
-
-            col1, col2 = st.columns(2)
-
-            with col1:
-                st.write("### Ubicación del Sensor")
-                st.write("**Universidad EAFIT**")
-                st.write("- Latitud: 6.2006")
-                st.write("- Longitud: -75.5783")
-                st.write("- Altitud: ~1,495 metros sobre el nivel del mar")
-
-            with col2:
-                st.write("### Detalles del Sensor")
-                st.write("- Tipo: ESP32")
-                st.write("- Variables medidas: " + ", ".join(variables))
-                st.write(f"- Número de registros: {len(df1)}")
-                if col_tiempo is not None and len(df1) > 0:
-                    st.write(f"- Desde: {df1.index.min():%Y-%m-%d %H:%M}")
-                    st.write(f"- Hasta: {df1.index.max():%Y-%m-%d %H:%M}")
-                st.write("- Ubicación: Campus universitario")
-
-    except Exception as e:
-        st.error(f"Error al procesar el archivo: {str(e)}")
-        st.info("Asegúrese de que el archivo CSV tenga al menos una columna numérica.")
-else:
-    st.warning("Por favor, cargue un archivo CSV para comenzar el análisis.")
+    st.metric("Posición Actual de la Compuerta", estado_servo)
 
 # ============================================================
 #  Pie de página
 # ============================================================
 st.markdown("""
     ---
-    Desarrollado para el análisis de datos de sensores urbanos.
-    Ubicación: Universidad EAFIT, Medellín, Colombia
+    **Sistema de Telemetría y Control de Cuarto Frío — Carnicería** | Universidad EAFIT
 """)
