@@ -57,49 +57,42 @@ st.markdown("""
 """)
 
 # ============================================================
-#  Carga de archivos locales (temp.csv y hum.csv)
+#  Carga robusta de temp.csv y hum.csv
 # ============================================================
-df1 = None
-archivo_temp = "temp.csv" if os.path.exists("temp.csv") else ("temp" if os.path.exists("temp") else None)
-archivo_hum = "hum.csv" if os.path.exists("hum.csv") else ("hum" if os.path.exists("hum") else None)
+df_t, df_h = pd.DataFrame(), pd.DataFrame()
+t_val, h_val = 0.0, 0.0
 
 try:
-  df_list = []
-  if archivo_temp and os.path.exists(archivo_temp):
-    df_t = pd.read_csv(archivo_temp)
+  if os.path.exists("temp.csv"):
+    df_t = pd.read_csv("temp.csv")
     df_t = preparar_datos(df_t)
-    df_list.append(df_t)
-
-  if archivo_hum and os.path.exists(archivo_hum):
-    df_h = pd.read_csv(archivo_hum)
+    nums_t = df_t.select_dtypes(include="number").columns
+    if len(nums_t) > 0 and not df_t.empty:
+      t_val = float(df_t[nums_t[0]].iloc[-1])
+  
+  if os.path.exists("hum.csv"):
+    df_h = pd.read_csv("hum.csv")
     df_h = preparar_datos(df_h)
-    df_list.append(df_h)
+    nums_h = df_h.select_dtypes(include="number").columns
+    if len(nums_h) > 0 and not df_h.empty:
+      h_val = float(df_h[nums_h[0]].iloc[-1])
 
-  if df_list:
-    # Unir ambos DataFrames de manera segura para evitar valores NaN
-    df1 = pd.concat(df_list, axis=1)
-    # Limpiar duplicados de columnas si los hubiera
-    df1 = df1.loc[:, ~df1.columns.duplicated()]
+  if not df_t.empty or not df_h.empty:
     st.sidebar.success("📂 Archivos `temp.csv` y `hum.csv` cargados correctamente.")
-
 except Exception as e:
-  st.sidebar.error(f"Error al procesar los archivos locales: {e}")
+  st.sidebar.error(f"Error al procesar los archivos: {e}")
 
-# Respaldo si no encuentra los archivos separados
-if df1 is None or df1.empty:
-  uploaded_file = st.sidebar.file_uploader("Cargar CSV consolidado", type=["csv"])
-  if uploaded_file is not None:
-    df1 = pd.read_csv(uploaded_file)
-    df1 = preparar_datos(df1)
-  else:
-    st.warning("⚠️ No se encontraron `temp.csv` o `hum.csv` en la raíz del repositorio. Por favor, súbelos a GitHub.")
-    st.stop()
+# Combinar para gráficas si ambos existen
+df1 = pd.DataFrame()
+if not df_t.empty and not df_h.empty:
+  df1 = pd.concat([df_t, df_h], axis=1)
+  df1 = df1.loc[:, ~df1.columns.duplicated()]
+elif not df_t.empty:
+  df1 = df_t
+elif not df_h.empty:
+  df1 = df_h
 
-variables = df1.select_dtypes(include="number").columns.tolist()
-
-if not variables:
-  st.error("No se encontraron columnas numéricas válidas en los datos.")
-  st.stop()
+variables = df1.select_dtypes(include="number").columns.tolist() if not df1.empty else []
 
 # ============================================================
 #  Pestañas de la Aplicación
@@ -112,50 +105,43 @@ tab1, tab2, tab3, tab4 = st.tabs([
 ])
 
 # ----------------------------------------------------
-#  TAB 1 · Panel Principal (Basado en tu imagen)
+#  TAB 1 · Panel Principal (Métricas exactas)
 # ----------------------------------------------------
 with tab1:
   st.subheader("Estado Actual del Sistema")
 
-  if not df1.empty:
-    ultimo = df1.iloc[-1]
-    
-    # Detección inteligente de variables para evitar NaN
-    col_t = next((c for c in variables if "temp" in c.lower() or "t" in c.lower()), variables[0])
-    col_h = next((c for c in variables if "hum" in c.lower() or "h" in c.lower()), variables[1] if len(variables) > 1 else variables[0])
+  # Determinar el estado del cuarto frío basado en los valores leídos
+  if h_val > 70:
+    estado_texto = "Peligro alta humedad"
+    estado_color = "🔴"
+    borde_color = "#ff4b4b"
+  elif t_val <= -18:
+    estado_texto = "Condiciones óptimas"
+    estado_color = "🟢"
+    borde_color = "#09ab3b"
+  else:
+    estado_texto = "Temperatura alta"
+    estado_color = "🟡"
+    borde_color = "#ffa100"
 
-    t_val = ultimo.get(col_t, 0)
-    h_val = ultimo.get(col_h, 0)
+  # Tarjetas principales de Temperatura y Humedad
+  c1, c2 = st.columns(2)
+  with c1:
+    st.metric(label="🌡️ Temperatura", value=f"{t_val:.1f} °C")
+  with c2:
+    st.metric(label="💧 Humedad", value=f"{h_val:.1f} %")
 
-    # Determinar el estado del cuarto frío basado en umbrales lógicos
-    if h_val > 70:
-      estado_texto = "Peligro alta humedad"
-      estado_color = "🔴"
-    elif t_val <= -18:
-      estado_texto = "Condiciones óptimas"
-      estado_color = "🟢"
-    else:
-      estado_texto = "Temperatura alta"
-      estado_color = "🟡"
-
-    # Tarjetas principales idénticas a la estructura solicitada
-    c1, c2 = st.columns(2)
-    with c1:
-      st.metric(label="🌡️ Temperatura", value=f"{t_val:.1f} °C")
-    with c2:
-      st.metric(label="💧 Humedad", value=f"{h_val:.1f} %")
-
-    st.markdown("---")
-    
-    # Tarjeta de Estado Grande
-    st.markdown(f"""
-        <div style="padding: 20px; border-radius: 10px; background-color: #f0f2f6; border-left: 6px solid #ffa100;">
-            <h3 style="margin:0; color: #31333F;">⚠️ Estado del Sistema</h3>
-            <p style="font-size: 24px; font-weight: bold; margin: 5px 0 0 0; color: #1f1f1f;">
-                {estado_color} {estado_texto}
-            </p>
-        </div>
-    """, unsafe_allow_html=True)
+  st.markdown("---")
+  
+  # Tarjeta de Estado Grande
+  st.markdown(f"""
+      <div style="padding: 20px; border-radius: 10px; background-color: #f0f2f6; border-left: 6px solid {borde_color};">
+          <h3 style="margin:0; color: #31333F;">⚠️ Estado del Sistema</h3>
+          <p style="font-size: 24px; font-weight: bold; margin: 5px 0 0 0; color: #1f1f1f;">
+              {estado_color} {estado_texto}
+          </p>
+      </div>
+  """, unsafe_allow_html=True)
 
 # ----------------------------------------------------
 #  TAB 2 · Conservación de Carnes
@@ -176,7 +162,10 @@ with tab2:
 # ----------------------------------------------------
 with tab3:
   st.subheader("Tendencia de Temperatura y Humedad")
-  st.line_chart(df1[variables])
+  if not df1.empty and len(variables) > 0:
+    st.line_chart(df1[variables])
+  else:
+    st.warning("No hay suficientes datos históricos para graficar.")
 
 # ----------------------------------------------------
 #  TAB 4 · Control y Ventilación
@@ -185,19 +174,14 @@ with tab4:
   st.subheader("Gestión del Servomotor (Ventilación)")
   st.write("El sistema ajusta la compuerta de ventilación según los valores del entorno para disipar calor o expulsar humedad.")
   
-  if not df1.empty:
-    ultimo = df1.iloc[-1]
-    t_val = ultimo.get(variables[0], -18)
-    h_val = ultimo.get(variables[1] if len(variables) > 1 else variables[0], 50)
+  if h_val > 70:
+    servo_pos = "Abierto (180°) - Expulsando humedad"
+  elif t_val <= -18:
+    servo_pos = "Cerrado (0°) - Manteniendo frío"
+  else:
+    servo_pos = "Medio (90°) - Disipando temperatura alta"
 
-    if h_val > 70:
-      servo_pos = "Abierto (180°) - Expulsando humedad"
-    elif t_val <= -18:
-      servo_pos = "Cerrado (0°) - Manteniendo frío"
-    else:
-      servo_pos = "Medio (90°) - Disipando temperatura alta"
-
-    st.metric("Posición de la Compuerta", servo_pos)
+  st.metric("Posición de la Compuerta", servo_pos)
 
 # ============================================================
 #  Pie de página
